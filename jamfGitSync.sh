@@ -66,8 +66,10 @@ function changed_scripts() {
 
   # Create json containing both the original json record and the script contents
   json=$(
-    jq --rawfile scriptContents "$script" '. + {"scriptContents": $scriptContents}' < "$cleanRecord"
+    jq -Rsn --argjson a "$cleanRecord" --rawfile script "$script" '$a + { "scriptContents": $script }'
   )
+
+  echo "$json" > tmp_script.json
 
   if [[ -z "$json" ]]; then
     echo "[ERROR] Failed to encode json and the script contents properly."
@@ -87,31 +89,35 @@ function changed_scripts() {
 
     echo "[INFO] Updating script: $name..."
     httpCode=$(
-      curl -s -H "Authorization: Bearer $apiToken" \
+      curl -s -X PUT \
+        -H "Authorization: Bearer $apiToken" \
         -H "Content-Type: application/json" \
         "$jamfProURL/api/v1/scripts/$id" \
-        -d "$json" \
-        -X PUT \
+        --data-binary @tmp_script.json \
         -o /dev/null \
         -w "%{http_code}"
     )
     parse_http_code "$httpCode" || return 1
+        # -o /dev/null \
+        # -w "%{http_code}"
   else
     [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating updating script \"$name\"..." && sleep 1 && return
 
     echo "[INFO] Creating new script: $name..."
     httpCode=$(
-      curl -s -H "Authorization: Bearer $apiToken" \
+      curl -s -v -X POST \
+        -H "Authorization: Bearer $apiToken" \
         -H "Content-Type: application/json" \
         "$jamfProURL/api/v1/scripts" \
-        -d "$json" \
-        -X PUT \
+        --data-binary @tmp_script.json \
         -o /dev/null \
         -w "%{http_code}"
     )
     parse_http_code "$httpCode" || return 1
 
   fi
+
+  rm tmp_script.json
 
   return
 }
