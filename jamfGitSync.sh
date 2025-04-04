@@ -66,7 +66,10 @@ function changed_scripts() {
 
   # Create json containing both the original json record and the script contents
   json=$(
-    jq -Rsn --argjson a "$cleanRecord" --rawfile script "$script" '$a + { "scriptContents": $script }'
+    jq -Rsn \
+      --argjson cleanRecord "$cleanRecord" \
+      --rawfile script "$script" \
+      '$cleanRecord + { "scriptContents": $script }'
   )
 
   echo "$json" > tmp_script.json
