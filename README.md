@@ -18,11 +18,13 @@ This is a rewrite of [git4jamfpro](https://github.com/alectrona/git4jamfpro) (wh
 
 - A Jamf Pro instance (ofcourse)
 - A git vcs server (github, bitbucket, ...)
-- A generated Client ID & Client Secret for your Jamf instance.
+- [`jq`](https://github.com/jqlang/jq) installed
+- A generated Client ID & Client Secret for your Jamf Pro instance
     - Permissions required:
         - Create Scripts
         - Read Scripts
         - Update Scripts
+- A CI/CD tool for automation (Jenkins, CircleCI, Bitbucket Pipelines, GitHub Workflows, ...)
 
 ### Steps
 
@@ -44,7 +46,7 @@ git add .
 git commit -a -m "feat(init): initial setup"
 ```
 
-4. Configure your CI/CD pipeline (see [Wiki](https://github.com/74k1/jamfScriptSync/wiki))
+4. Configure your CI/CD pipeline (see [Wiki](https://github.com/74k1/jamfGitSync/wiki/Pipeline-examples))
 
 5. Now you can make changes to your scripts locally, push those changes to git and watch your CI/CD do the rest of the job.
 
