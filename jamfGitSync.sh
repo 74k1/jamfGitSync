@@ -39,7 +39,7 @@ function changed_scripts() {
   # If the changed file is the script, we need to find the accompanying json file
   if [[ "$change" =~ .*(.py|.swift|.pl|.rb|.applescript|.zsh|.sh)$ ]]; then
     script="$changedFile"
-    record=$(find "$(dirname "$changedFile")" -name "*.xml" -maxdepth 1 -mindepth 1 | head -n 1 )
+    record=$(find "$(dirname "$changedFile")" -name "*.json" -maxdepth 1 -mindepth 1 | head -n 1 )
   fi
 
   # Exit if there's no json file
@@ -62,7 +62,7 @@ function changed_scripts() {
   [[ -z "$name" ]] && echo "[ERROR] Could not determine name of script from json record, skipping." && return 1
 
   # Determine the id of a script that may exist in Jamf Pro with the same name
-  id=$(get_script_summaries | jq -r -c '.results | .[] | select(.name | test("$name"; "i")) | .id' )
+  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name | test($name; "i")) | .id' )
 
   # Create json containing both the original json record and the script contents
   json=$(
@@ -93,9 +93,9 @@ function changed_scripts() {
     echo "[INFO] Updating script: $name..."
     httpCode=$(
       curl -s -X PUT \
-        -H "Authorization: Bearer $apiToken" \
-        -H "Content-Type: application/json" \
-        "$jamfProURL/api/v1/scripts/$id" \
+        --header "Authorization: Bearer $apiToken" \
+        --header "Content-Type: application/json" \
+        --url "$jamfProURL/api/v1/scripts/$id" \
         --data-binary @tmp_script.json \
         -o /dev/null \
         -w "%{http_code}"
@@ -108,10 +108,10 @@ function changed_scripts() {
 
     echo "[INFO] Creating new script: $name..."
     httpCode=$(
-      curl -s -v -X POST \
-        -H "Authorization: Bearer $apiToken" \
-        -H "Content-Type: application/json" \
-        "$jamfProURL/api/v1/scripts" \
+      curl -s -X POST \
+        --header "Authorization: Bearer $apiToken" \
+        --header "Content-Type: application/json" \
+        --url "$jamfProURL/api/v1/scripts" \
         --data-binary @tmp_script.json \
         -o /dev/null \
         -w "%{http_code}"
@@ -144,7 +144,8 @@ function auth() {
       --data "grant_type=client_credentials" \
       --data "client_id=${clientId}" \
       --data "client_secret=${clientSecret}" \
-      -o "$scriptSummariesFile" -w "%{http_code}"
+      -o "$scriptSummariesFile" \
+      -w "%{http_code}"
   )
 
   apiToken=$(jq -r ".access_token" < "$scriptSummariesFile")
@@ -163,10 +164,12 @@ function get_script_summaries() {
   if [[ -e "$scriptSummariesFile" ]]; then
     cat "$scriptSummariesFile"
   else
-    curl -s -H "Authorization: Bearer $apiToken" -H "accept: application/json" \
-      "$jamfProURL/api/v1/scripts?page=0&page-size=10000&sort=id%3Aasc" \
+    curl -s -X GET \
+      --url "$jamfProURL/api/v1/scripts?page=0&page-size=10000&sort=id%3Aasc" \
+      --header "Authorization: Bearer $apiToken" \
+      --header "accept: application/json" \
       -o "$scriptSummariesFile" \
-      -X GET 2>/dev/null
+      2>/dev/null
     cat "$scriptSummariesFile"
   fi
 }
@@ -179,10 +182,10 @@ function download_script() {
   local script shebang extension
 
   # Pull the full script object
-  script=$(curl --request GET \
-    "$jamfProURL/api/v1/scripts/$id" \
-    -H "accept: application/json" \
-    -H "Authorization: Bearer $apiToken" \
+  script=$(curl -X GET \
+    --url "$jamfProURL/api/v1/scripts/$id" \
+    --header "accept: application/json" \
+    --header "Authorization: Bearer $apiToken" \
     2>/dev/null
   )
 
@@ -281,7 +284,7 @@ function get_script_extension() {
 }
 
 function finish() {
-  [[ -n "$apiToken" ]] && curl -s -H "Authorization: Bearer $apiToken" "$jamfProURL/v1/auth/invalidate-token" -X POST
+  [[ -n "$apiToken" ]] && curl -s -H "Authorization: Bearer $apiToken" --url "$jamfProURL/v1/auth/invalidate-token" -X POST
 
   rm "$scriptSummariesFile" 2>/dev/null
 }
