@@ -82,9 +82,7 @@ function changed_scripts() {
 
   # Update the script in Jamf Pro if it already exists
   # Otherwise, create a new script in Jamf Pro
-
   if [[ -n "$id" ]]; then
-
     # If configured to backup
     [[ "$backupUpdated" == "true" ]] && download_script "$id" "$name" "./backups/scrpits"
 
@@ -102,10 +100,8 @@ function changed_scripts() {
         -w "%{http_code}"
     )
     parse_http_code "$httpCode" || return 1
-        # -o /dev/null \
-        # -w "%{http_code}"
   else
-    [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating updating script \"$name\"..." && sleep 1 && return
+    [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating creating script \"$name\"..." && sleep 1 && return
 
     echo "[INFO] Creating new script: $name..."
     httpCode=$(
@@ -118,7 +114,6 @@ function changed_scripts() {
         -w "%{http_code}"
     )
     parse_http_code "$httpCode" || return 1
-
   fi
 
   rm tmp_script.json
@@ -217,6 +212,9 @@ function parse_http_code() {
     201)
       return
       ;;
+    202) # accepted for processing
+      return
+      ;;
     204)
       return
       ;;
@@ -248,9 +246,10 @@ function parse_http_code() {
       echo "[ERROR] 503: Service unavailable."
       ;;
     *)
-      echo "[ERROR] $httpCode: Unknown error occured."
+      echo "[ERROR] $httpCode: Unknown error occurred."
       ;;
   esac
+  return 1
 }
 
 function get_script_extension() {
