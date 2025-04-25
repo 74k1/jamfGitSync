@@ -515,7 +515,7 @@ if [[ "$pushChangesToJamfPro" == "true" ]]; then
       echo "[WARNING] Ignoring non-tracked changed file: $change"
       continue
     fi
-  done < <(git diff --name-only HEAD HEAD~1 2>/dev/null | grep -E '^(scripts|extension-attributes).*' | rev | sort -u -t '/' -k2 | rev | sort)
+  done < <(git diff --name-only HEAD HEAD~1 2>/dev/null | grep -E '^(scripts|extension-attributes).*' | rev | sort -u -t '/' -k2 | rev | sort 2>/dev/null)
   exit 0
 fi
 
