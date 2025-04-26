@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-# Add strict mode
-set -euo pipefail
-IFS=$'\n\t'
-
 # Vars
 numCores=$(getconf _NPROCESSORS_ONLN)
 maxParallelJobs="$(( numCores * 2 ))"
@@ -15,43 +11,18 @@ eaSummariesFile="/tmp/ea_summaries.json"
 exec 3>&2
 exec 2>/dev/null
 
-# Ensure secure file permissions for temporary files
-umask 077
-
 unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken backupUpdated
 
 # Checks
 
 # jq
 if ! command -v jq > /dev/null ; then
+    exec 2>&3
     echo "[Error] jq is not installed but required."
     exit 1
 fi
 
 # Functions
-
-# Input validation function
-validate_path() {
-  local path="$1"
-  # Check for path traversal attempts
-  case "$path" in
-    *'..'*|*'//'*|*'/./'*)
-      echo "[ERROR] Invalid path detected: $path"
-      return 1
-      ;;
-  esac
-  return 0
-}
-
-# Validate JSON function
-validate_json() {
-  local json_file="$1"
-  if ! jq empty "$json_file" 2>/dev/null; then
-    echo "[ERROR] Invalid JSON in file: $json_file"
-    return 1
-  fi
-  return 0
-}
 
 function changed_scripts() {
   local change="$1"
@@ -151,12 +122,6 @@ function changed_scripts() {
 function auth() {
   local healthCheckHttpCode response
 
-  # Validate URL format
-  if [[ ! "$jamfProURL" =~ ^https:// ]]; then
-    echo "[ERROR] URL must use HTTPS"
-    exit 1
-  fi
-
   # attempt contacting the Jamf Pro Server
   healthCheckHttpCode=$(curl -s "$jamfProURL"/healthCheck.html -X GET -o /dev/null -w "%{http_code}")
 
@@ -180,22 +145,25 @@ function auth() {
   apiToken=$(jq -r ".access_token" < "$scriptSummariesFile")
 
   echo "HTTP Status Code: $response"
+  echo "Token: $apiToken"
+  
   parse_http_code "$response" || exit 3
 
-  rm -f "$scriptSummariesFile"
+  rm "$scriptSummariesFile"
+
   return
 }
 
 function get_script_summaries() {
   if [[ -e "$scriptSummariesFile" ]]; then
-    jq '.' "$scriptSummariesFile" || echo '{"results":[]}'
+    jq '.' "$scriptSummariesFile" 2>/dev/null || echo '{"results":[]}'
   else
     curl -s -X GET \
       --url "$jamfProURL/api/v1/scripts?page=0&page-size=10000&sort=id%3Aasc" \
       --header "Authorization: Bearer $apiToken" \
       --header "accept: application/json" \
       -o "$scriptSummariesFile"
-    jq '.' "$scriptSummariesFile" || echo '{"results":[]}'
+    jq '.' "$scriptSummariesFile" 2>/dev/null || echo '{"results":[]}'
   fi
 }
 
@@ -315,39 +283,26 @@ function get_script_extension() {
 function finish() {
   [[ -n "$apiToken" ]] && curl -s -H "Authorization: Bearer $apiToken" --url "$jamfProURL/v1/auth/invalidate-token" -X POST
   exec 2>&3  # Restore stderr
-  rm -f "$scriptSummariesFile" "$eaSummariesFile"
-  # Clear sensitive variables
-  unset apiToken clientId clientSecret
+  rm "$scriptSummariesFile" 2>/dev/null
+  rm "$eaSummariesFile" 2>/dev/null
 }
 
 function get_ea_summaries() {
   if [[ -e "$eaSummariesFile" ]]; then
-    jq '.' "$eaSummariesFile" || echo '{"results":[]}'
+    jq '.' "$eaSummariesFile" 2>/dev/null || echo '{"results":[]}'
   else
     curl -s -X GET \
       --url "$jamfProURL/api/v1/computer-extension-attributes?page=0&page-size=10000&sort=id%3Aasc" \
       --header "Authorization: Bearer $apiToken" \
       --header "accept: application/json" \
       -o "$eaSummariesFile"
-    jq '.' "$eaSummariesFile" || echo '{"results":[]}'
+    jq '.' "$eaSummariesFile" 2>/dev/null || echo '{"results":[]}'
   fi
 }
 
 function changed_eas() {
   local change="$1"
-  local changedFile
-
-  # Validate and sanitize input path
-  if ! validate_path "$change"; then
-    return 1
-  fi
-  
-  changedFile="$(realpath -q "./${change}")"
-  if [[ ! "$changedFile" =~ ^"$(pwd)" ]]; then
-    echo "[ERROR] Path traversal attempt detected"
-    return 1
-  fi
-
+  local changedFile="./${change}"
   local record name script cleanRecord id json httpCode
 
   # Exit if file doesnt exist
@@ -600,8 +555,5 @@ if [[ "$downloadEAs" == "true" ]]; then
   done < <(get_ea_summaries | jq -r -c '.results | .[]' 2>/dev/null)
   wait
 fi
-
-# Set up trap to ensure cleanup
-trap finish EXIT INT TERM
 
 exit 0
