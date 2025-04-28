@@ -47,10 +47,22 @@ git add .
 git commit -a -m "feat(init): initial setup"
 ```
 
-4. Configure your CI/CD pipeline (see [Wiki](https://github.com/74k1/jamfGitSync/wiki/Pipeline-examples))
+4. Push this commit to your own repository. (wherever you'll want to have those scripts stored)
 
-5. Now you can make changes to your scripts locally, push those changes to git and watch your CI/CD do the rest of the job.
+
+### Next Steps
+
+After you're done with the initial setup, your Pipelines _could_ look something like this (ofcourse this depends on your own setup, and these are just examples):
+
+- [Jenkins](https://github.com/74k1/jamfGitSync/wiki/Jenkins-example)
+- [BitBucket](https://github.com/74k1/jamfGitSync/wiki/BitBucket-example)
+- [GitHub Workflows](https://github.com/74k1/jamfGitSync/wiki/GitHub-Workflows-example)
+- [CircleCI](https://github.com/74k1/jamfGitSync/wiki/CircleCI-example)
+
+Now you can make changes to your scripts in your own repository, push those changes to git and watch your CI/CD do the rest of the job. :smile:
 
 ## Contribution
 
-Feel free to submit PRs! I'm looking forward to your suggestions / improvements. :)
+All contributions are greatly appreciated! It'd make my day if you could read the Contribution Guidelines first.
+
+I'm looking forward to your suggestions / improvements. :)
