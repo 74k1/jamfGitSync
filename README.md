@@ -30,13 +30,14 @@ This is a rewrite of [git4jamfpro](https://github.com/alectrona/git4jamfpro) (wh
 
 1. Fork / Download this repository
 
-2. Download all of your current scripts:
+2. Download all of your current scripts & extension attributes:
 
 ```sh
 ./jamfScriptSync.sh --url <YOUR_JAMF_PRO_SERVER> \
     --clientid <API_Client_ID> \
     --clientsecret <API_Client_Secret> \
-    --download-scripts
+    --download-scripts \
+    --download-eas
 ```
 
 3. Commit the repository populated with scripts to your git:
