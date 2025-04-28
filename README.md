@@ -65,4 +65,6 @@ Now you can make changes to your scripts in your own repository, push those chan
 
 All contributions are greatly appreciated! It'd make my day if you could read the Contribution Guidelines first.
 
+- [Contribution Guidelines](https://github.com/74k1/jamfGitSync/blob/main/docs/CONTRIBUTING.md)
+
 I'm looking forward to your suggestions / improvements. :)
