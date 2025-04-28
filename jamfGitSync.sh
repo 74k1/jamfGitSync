@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 
+# Add strict mode
+set -euo pipefail
+IFS=$'\n\t'
+
 # Vars
 numCores=$(getconf _NPROCESSORS_ONLN)
 maxParallelJobs="$(( numCores * 2 ))"
 unameType=$(uname -s)
 scriptSummariesFile="/tmp/script_summaries.json"
+eaSummariesFile="/tmp/ea_summaries.json"
 
-unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken
+# Redirect jq stderr to /dev/null globally
+exec 3>&2
+exec 2>/dev/null
+
+# Ensure secure file permissions for temporary files
+umask 077
+
+unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken backupUpdated
 
 # Checks
 
@@ -17,6 +29,29 @@ if ! command -v jq > /dev/null ; then
 fi
 
 # Functions
+
+# Input validation function
+validate_path() {
+  local path="$1"
+  # Check for path traversal attempts
+  case "$path" in
+    *'..'*|*'//'*|*'/./'*)
+      echo "[ERROR] Invalid path detected: $path"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# Validate JSON function
+validate_json() {
+  local json_file="$1"
+  if ! jq empty "$json_file" 2>/dev/null; then
+    echo "[ERROR] Invalid JSON in file: $json_file"
+    return 1
+  fi
+  return 0
+}
 
 function changed_scripts() {
   local change="$1"
@@ -62,30 +97,22 @@ function changed_scripts() {
   [[ -z "$name" ]] && echo "[ERROR] Could not determine name of script from json record, skipping." && return 1
 
   # Determine the id of a script that may exist in Jamf Pro with the same name
-  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name | test($name; "i")) | .id' )
+  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name | test($name; "i")) | .id')
 
   # Create json containing both the original json record and the script contents
-  json=$(
-    jq -Rsn \
-      --argjson cleanRecord "$cleanRecord" \
-      --rawfile script "$script" \
-      '$cleanRecord + { "scriptContents": $script }'
-  )
+  jq -n --argjson cleanRecord "$cleanRecord" --rawfile script "$script" \
+    '$cleanRecord + { "scriptContents": $script }' > tmp_script.json
 
-  echo "$json" > tmp_script.json
-
-  if [[ -z "$json" ]]; then
+  if [[ ! -s "tmp_script.json" ]]; then
     echo "[ERROR] Failed to encode json and the script contents properly."
     return 1
   fi
 
   # Update the script in Jamf Pro if it already exists
   # Otherwise, create a new script in Jamf Pro
-
   if [[ -n "$id" ]]; then
-
     # If configured to backup
-    [[ "$backupUpdated" == "true" ]] && download_script "$id" "$name" "./backups/scrpits"
+    [[ "$backupUpdated" == "true" ]] && download_script "$id" "$name" "./backups/scripts"
 
     # Handle dry run and return
     [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating updating script \"$name\"..." && sleep 1 && return
@@ -101,10 +128,8 @@ function changed_scripts() {
         -w "%{http_code}"
     )
     parse_http_code "$httpCode" || return 1
-        # -o /dev/null \
-        # -w "%{http_code}"
   else
-    [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating updating script \"$name\"..." && sleep 1 && return
+    [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating creating script \"$name\"..." && sleep 1 && return
 
     echo "[INFO] Creating new script: $name..."
     httpCode=$(
@@ -117,16 +142,20 @@ function changed_scripts() {
         -w "%{http_code}"
     )
     parse_http_code "$httpCode" || return 1
-
   fi
 
-  rm tmp_script.json
-
+  rm -f tmp_script.json
   return
 }
 
 function auth() {
   local healthCheckHttpCode response
+
+  # Validate URL format
+  if [[ ! "$jamfProURL" =~ ^https:// ]]; then
+    echo "[ERROR] URL must use HTTPS"
+    exit 1
+  fi
 
   # attempt contacting the Jamf Pro Server
   healthCheckHttpCode=$(curl -s "$jamfProURL"/healthCheck.html -X GET -o /dev/null -w "%{http_code}")
@@ -151,26 +180,22 @@ function auth() {
   apiToken=$(jq -r ".access_token" < "$scriptSummariesFile")
 
   echo "HTTP Status Code: $response"
-  echo "Token: $apiToken"
-  
   parse_http_code "$response" || exit 3
 
-  rm "$scriptSummariesFile"
-
+  rm -f "$scriptSummariesFile"
   return
 }
 
 function get_script_summaries() {
   if [[ -e "$scriptSummariesFile" ]]; then
-    cat "$scriptSummariesFile"
+    jq '.' "$scriptSummariesFile" || echo '{"results":[]}'
   else
     curl -s -X GET \
       --url "$jamfProURL/api/v1/scripts?page=0&page-size=10000&sort=id%3Aasc" \
       --header "Authorization: Bearer $apiToken" \
       --header "accept: application/json" \
-      -o "$scriptSummariesFile" \
-      2>/dev/null
-    cat "$scriptSummariesFile"
+      -o "$scriptSummariesFile"
+    jq '.' "$scriptSummariesFile" || echo '{"results":[]}'
   fi
 }
 
@@ -216,6 +241,9 @@ function parse_http_code() {
     201)
       return
       ;;
+    202) # accepted for processing
+      return
+      ;;
     204)
       return
       ;;
@@ -247,9 +275,10 @@ function parse_http_code() {
       echo "[ERROR] 503: Service unavailable."
       ;;
     *)
-      echo "[ERROR] $httpCode: Unknown error occured."
+      echo "[ERROR] $httpCode: Unknown error occurred."
       ;;
   esac
+  return 1
 }
 
 function get_script_extension() {
@@ -285,8 +314,161 @@ function get_script_extension() {
 
 function finish() {
   [[ -n "$apiToken" ]] && curl -s -H "Authorization: Bearer $apiToken" --url "$jamfProURL/v1/auth/invalidate-token" -X POST
+  exec 2>&3  # Restore stderr
+  rm -f "$scriptSummariesFile" "$eaSummariesFile"
+  # Clear sensitive variables
+  unset apiToken clientId clientSecret
+}
 
-  rm "$scriptSummariesFile" 2>/dev/null
+function get_ea_summaries() {
+  if [[ -e "$eaSummariesFile" ]]; then
+    jq '.' "$eaSummariesFile" || echo '{"results":[]}'
+  else
+    curl -s -X GET \
+      --url "$jamfProURL/api/v1/computer-extension-attributes?page=0&page-size=10000&sort=id%3Aasc" \
+      --header "Authorization: Bearer $apiToken" \
+      --header "accept: application/json" \
+      -o "$eaSummariesFile"
+    jq '.' "$eaSummariesFile" || echo '{"results":[]}'
+  fi
+}
+
+function changed_eas() {
+  local change="$1"
+  local changedFile
+
+  # Validate and sanitize input path
+  if ! validate_path "$change"; then
+    return 1
+  fi
+  
+  changedFile="$(realpath -q "./${change}")"
+  if [[ ! "$changedFile" =~ ^"$(pwd)" ]]; then
+    echo "[ERROR] Path traversal attempt detected"
+    return 1
+  fi
+
+  local record name script cleanRecord id json httpCode
+
+  # Exit if file doesnt exist
+  [[ ! -e "$changedFile" ]] && echo "[ERROR] File does not exist: $changedFile" && exit 1
+
+  # If the changed file is .json, then we need to locate the accompanying script
+  if [[ "$change" == *.json ]]; then
+    record="$changedFile"
+    if [[ "$unameType" == "Darwin" ]]; then
+      script=$(find -E "$(dirname "$changedFile")" -regex '.*(.py|.swift|.pl|.rb|.applescript|.zsh|.sh)$' -maxdepth 1 -mindepth 1 | head -n 1 )
+    else
+      script=$(find "$(dirname "$changedFile")" -regextype posix-extended -regex '.*(.py|.swift|.pl|.rb|.applescript|.zsh|.sh)$' -maxdepth 1 -mindepth 1 | head -n 1 )
+    fi
+  fi
+
+  # If the changed file is the script, we need to find the accompanying json file
+  if [[ "$change" =~ .*(.py|.swift|.pl|.rb|.applescript|.zsh|.sh)$ ]]; then
+    script="$changedFile"
+    record=$(find "$(dirname "$changedFile")" -name "*.json" -maxdepth 1 -mindepth 1 | head -n 1 )
+  fi
+
+  # Exit if there's no json file
+  if [[ -z "$record" ]]; then
+    echo "[ERROR] No record json found for: $change"
+    return 1
+  fi
+
+  # Same for the script
+  if [[ -z "$script" ]]; then
+    echo "[ERROR] Script not found for: $change"
+    return 1
+  fi
+
+  # Make sure the json doesn't include things we don't want
+  cleanRecord=$(jq 'del(.id) | del(.scriptContents)' < "$record")
+
+  # Ensure we can get a name from the xml record
+  name=$(echo "$cleanRecord" | jq -r -c '.name')
+  [[ -z "$name" ]] && echo "[ERROR] Could not determine name of EA from json record, skipping." && return 1
+
+  # Determine the id of an EA that may exist in Jamf Pro with the same name
+  id=$(get_ea_summaries | jq -r --arg name "$name" -c '.results[] | select( .name | test($name; "i")) | .id')
+
+  # Create json containing both the original json record and the script contents
+  jq -n --argjson cleanRecord "$cleanRecord" --rawfile script "$script" \
+    '$cleanRecord + { "scriptContents": $script }' > tmp_ea.json
+
+  if [[ ! -s "tmp_ea.json" ]]; then
+    echo "[ERROR] Failed to encode json and the script contents properly."
+    return 1
+  fi
+
+  # Update the EA in Jamf Pro if it already exists
+  # Otherwise, create a new EA in Jamf Pro
+  if [[ -n "$id" ]]; then
+    # If configured to backup
+    [[ "$backupUpdated" == "true" ]] && download_ea "$id" "$name" "./backups/extension-attributes"
+
+    # Handle dry run and return
+    [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating updating EA \"$name\"..." && sleep 1 && return
+
+    echo "[INFO] Updating extension attribute: $name..."
+    httpCode=$(
+      curl -s -X PUT \
+        --header "Authorization: Bearer $apiToken" \
+        --header "Content-Type: application/json" \
+        --url "$jamfProURL/api/v1/computer-extension-attributes/$id" \
+        --data-binary @tmp_ea.json \
+        -o /dev/null \
+        -w "%{http_code}"
+    )
+    parse_http_code "$httpCode" || return 1
+  else
+    [[ "$dryRun" == "true" ]] && echo "[DRY] Simulating creating EA \"$name\"..." && sleep 1 && return
+
+    echo "[INFO] Creating new extension attribute: $name..."
+    httpCode=$(
+      curl -s -X POST \
+        --header "Authorization: Bearer $apiToken" \
+        --header "Content-Type: application/json" \
+        --url "$jamfProURL/api/v1/computer-extension-attributes" \
+        --data-binary @tmp_ea.json \
+        -o /dev/null \
+        -w "%{http_code}"
+    )
+    parse_http_code "$httpCode" || return 1
+  fi
+
+  rm -f tmp_ea.json
+  return
+}
+
+function download_ea() {
+  local id="$1"
+  local name="$2"
+  local dlPath="$3"
+  local ea shebang extension
+
+  # Pull the full EA object
+  ea=$(curl -X GET \
+    --url "$jamfProURL/api/v1/computer-extension-attributes/$id" \
+    --header "accept: application/json" \
+    --header "Authorization: Bearer $apiToken" \
+    2>/dev/null
+  )
+
+  [[ -z "$ea" ]] && echo "[ERROR] Error getting extension attribute." && return 1
+
+  shebang=$(echo "$ea" | jq -c -r '.scriptContents' | head -n 1)
+
+  extension=$(get_script_extension "$shebang")
+
+  echo "[INFO] Writing extension attribute \"$name\" to disk."
+
+  mkdir -p "${dlPath}/${name}"
+
+  echo "$ea" | jq 'del(.id) | del(.scriptContents)' > "${dlPath}/${name}/record.json"
+
+  echo "$ea" | jq -r -c '.scriptContents' | tr -d '\r' > "${dlPath}/${name}/script.${extension}"
+
+  return
 }
 
 # Main
@@ -309,6 +491,9 @@ do
       ;;
     --download-scripts)
       downloadScripts="true"
+      ;;
+    --download-eas)
+      downloadEAs="true"
       ;;
     --push-changes-to-jamf-pro)
       pushChangesToJamfPro="true"
@@ -349,27 +534,37 @@ if [[ "$pushChangesToJamfPro" == "true" ]]; then
   # Make sure we're running from a git repository
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
     echo "[ERROR] Not a git repository."
-    echo "[HINT] This is designed to upload changes to scripts that are changed between the latest two git commits."
+    echo "[HINT] This is designed to upload changes to scripts and extension attributes that are changed between the latest two git commits."
     exit 1
   fi
 
   echo "[INFO] Determining changes between the last two git commits.."
 
-  while read -r change; do
-    if [[ "$change" == scripts/* ]]; then
-      changed_scripts "$change"
-    else
-      echo "[WARNING] Ignoring non-tracked changed file: $change"
+  # Get the changes directly into an array
+  mapfile -t changes < <(git diff --name-only HEAD HEAD~1 2>/dev/null)
+
+  # Process each change
+  for change in "${changes[@]}"; do
+    # Skip if not in our target directories
+    if [[ ! "$change" =~ ^(scripts|extension-attributes).* ]]; then
       continue
     fi
-  done < <(git diff --name-only HEAD HEAD~1 2>/dev/null | grep -E '^scripts.*' | rev | sort -u -t '/' -k2 | rev | sort)
+
+    if [[ "$change" == scripts/* ]]; then
+      changed_scripts "$change"
+    elif [[ "$change" == extension-attributes/* ]]; then
+      changed_eas "$change"
+    else
+      echo "[WARNING] Ignoring non-tracked changed file: $change"
+    fi
+  done
   exit 0
 fi
 
-# Download scripts if configured to do so with two jobs per core (unless --limit is set)
+# Download scripts and EAs if configured to do so with two jobs per core (unless --limit is set)
 
 if [[ "$downloadScripts" == "true" ]]; then
-  echo "[INFO] Getting identifying info for all scritps in Jamf Pro..."
+  echo "[INFO] Getting identifying info for all scripts in Jamf Pro..."
 
   # Loop through each script ID/Name from a summary obtained from Jamf Pro
   while read -r summary; do
@@ -379,12 +574,34 @@ if [[ "$downloadScripts" == "true" ]]; then
     done
 
     # Extract the id and name of each script
-    id=$(echo "$summary" | jq -r -c '.id')
-    name=$(echo "$summary" | jq -r -c '.name')
+    id=$(echo "$summary" | jq -r -c '.id' 2>/dev/null)
+    name=$(echo "$summary" | jq -r -c '.name' 2>/dev/null)
 
     download_script "$id" "$name" "./scripts" &
-  done < <(get_script_summaries | jq -r -c '.results | .[]')
+  done < <(get_script_summaries | jq -r -c '.results | .[]' 2>/dev/null)
   wait
 fi
+
+if [[ "$downloadEAs" == "true" ]]; then
+  echo "[INFO] Getting identifying info for all extension attributes in Jamf Pro..."
+
+  # Loop through each EA ID/Name from a summary obtained from Jamf Pro
+  while read -r summary; do
+    # Limit the parallell jobs to what we've set as the max
+    until [[ "$(jobs -lr 2>&1 | wc -l)" -lt "$maxParallelJobs" ]]; do
+      sleep 1
+    done
+
+    # Extract the id and name of each EA
+    id=$(echo "$summary" | jq -r -c '.id' 2>/dev/null)
+    name=$(echo "$summary" | jq -r -c '.name' 2>/dev/null)
+
+    download_ea "$id" "$name" "./extension-attributes" &
+  done < <(get_ea_summaries | jq -r -c '.results | .[]' 2>/dev/null)
+  wait
+fi
+
+# Set up trap to ensure cleanup
+trap finish EXIT INT TERM
 
 exit 0
