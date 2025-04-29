@@ -21,9 +21,26 @@ This is a rewrite of [git4jamfpro](https://github.com/alectrona/git4jamfpro) (wh
 - [`jq`](https://github.com/jqlang/jq) installed
 - A generated Client ID & Client Secret for your Jamf Pro instance
     - Permissions required:
+      ![required_permissions](/.github/assets/permissions.png)
+
+      <details>
+        <summary>in Text..</summary>
+        
         - Create Scripts
         - Read Scripts
         - Update Scripts
+        - Create Computer Extension Attributes
+        - Create Mobile Device Extension Attributes
+        - Create User Extension Attributes
+        - Read Computer Extension Attributes
+        - Read Mobile Device Extension Attributes
+        - Read User Extension Attributes
+        - Update Computer Extension Attributes
+        - Update Mobile Device Extension Attributes
+        - Update User Extension Attributes
+
+      </details>
+
 - A CI/CD tool for automation (Jenkins, CircleCI, Bitbucket Pipelines, GitHub Workflows, ...)
 
 ### Steps
