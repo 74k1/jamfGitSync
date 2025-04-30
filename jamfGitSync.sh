@@ -29,8 +29,14 @@ function changed_scripts() {
   local changedFile="./${change}"
   local record name script cleanRecord id json httpCode
 
+  # Check if file was deleted (check git status)
+  if git ls-files --deleted | grep -q "^${change}$"; then
+    echo "[INFO] Skipping deleted file: $change"
+    return 0
+  fi
+
   # Exit if file doesnt exist
-  [[ ! -e "$changedFile" ]] && echo "[ERROR] File does not exist: $changedFile" && exit 1
+  [[ ! -e "$changedFile" ]] && echo "[ERROR] File does not exist: $changedFile" && return 1
 
   # If the changed file is .json, then we need to locate the accompanying script
   if [[ "$change" == *.json ]]; then
@@ -305,8 +311,14 @@ function changed_eas() {
   local changedFile="./${change}"
   local record name script cleanRecord id json httpCode
 
+  # Check if file was deleted (check git status)
+  if git ls-files --deleted | grep -q "^${change}$"; then
+    echo "[INFO] Skipping deleted file: $change"
+    return 0
+  fi
+
   # Exit if file doesnt exist
-  [[ ! -e "$changedFile" ]] && echo "[ERROR] File does not exist: $changedFile" && exit 1
+  [[ ! -e "$changedFile" ]] && echo "[ERROR] File does not exist: $changedFile" && return 1
 
   # If the changed file is .json, then we need to locate the accompanying script
   if [[ "$change" == *.json ]]; then
@@ -498,12 +510,33 @@ if [[ "$pushChangesToJamfPro" == "true" ]]; then
   # Get the changes directly into an array
   mapfile -t changes < <(git diff --name-only HEAD HEAD~1 2>/dev/null)
 
+  # Track processed directories to avoid duplicate processing
+  declare -A processed_dirs
+
   # Process each change
   for change in "${changes[@]}"; do
     # Skip if not in our target directories
     if [[ ! "$change" =~ ^(scripts|extension-attributes).* ]]; then
       continue
     fi
+
+    # Get the directory of the changed file
+    dir=$(dirname "$change")
+    
+    # If we've already processed this directory, skip
+    if [[ -n "${processed_dirs[$dir]}" ]]; then
+      continue
+    fi
+    
+    # If directory is deleted, mark it as processed and skip all its files
+    if [[ ! -d "$dir" ]]; then
+      echo "[INFO] Skipping deleted directory: $dir"
+      processed_dirs[$dir]=1
+      continue
+    fi
+    
+    # Mark directory as processed
+    processed_dirs[$dir]=1
 
     if [[ "$change" == scripts/* ]]; then
       changed_scripts "$change"
