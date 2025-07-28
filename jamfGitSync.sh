@@ -6,23 +6,72 @@ maxParallelJobs="$(( numCores * 2 ))"
 unameType=$(uname -s)
 scriptSummariesFile="/tmp/script_summaries.json"
 eaSummariesFile="/tmp/ea_summaries.json"
+debug="false"
 
 # Redirect jq stderr to /dev/null globally
 exec 3>&2
 exec 2>/dev/null
 
-unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken backupUpdated
+unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken backupUpdated forceScripts forceEAs
 
 # Checks
 
 # jq
 if ! command -v jq > /dev/null ; then
-    exec 2>&3
-    echo "[Error] jq is not installed but required."
-    exit 1
+  exec 2>&3
+  echo "[ERROR] jq is not installed but required."
+  exit 1
 fi
 
+# Bash 4.0 or higher
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+  exec 2>&3
+  echo "[ERROR] Bash version is less than 4."
+  exit 1
+fi
+  
 # Functions
+function print_help() {
+  cat << EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --url URL                  Jamf Pro URL (required)
+  --clientid ID              API Client ID (required)
+  --clientsecret SECRET      API Client Secret (required)
+  
+  --download-scripts         Download all scripts from Jamf Pro
+  --download-eas             Download all extension attributes from Jamf Pro
+  --push-changes-to-jamf-pro Push local changes to Jamf Pro (requires git)
+  --backup-updated           Backup items before updating them in Jamf Pro
+  
+  --force-scripts            Push ALL scripts to Jamf Pro (not just changed ones)
+  --force-eas                Push ALL extension attributes to Jamf Pro (not just changed ones)
+  
+  --limit N                  Set maximum parallel jobs (default: 2x CPU cores)
+  --dry-run                  Simulate changes without actually making them
+  --debug                    Enable debug output (more verbose)
+  
+  --help                     Show this help message and exit
+
+Examples:
+  # Download all scripts and extension attributes
+  $0 --url https://your.jamf.server --clientid api_client --clientsecret secret --download-scripts --download-eas
+  
+  # Push changed scripts/EAs to Jamf Pro
+  $0 --url https://your.jamf.server --clientid api_client --clientsecret secret --push-changes-to-jamf-pro
+  
+  # Force push all scripts to Jamf Pro
+  $0 --url https://your.jamf.server --clientid api_client --clientsecret secret --force-scripts
+EOF
+  exit 0
+}
+
+function debug() {
+  if [[ "$debug" == "true" ]]; then
+    echo "[DEBUG] $1" >&3
+  fi
+}
 
 function changed_scripts() {
   local change="$1"
@@ -74,7 +123,7 @@ function changed_scripts() {
   [[ -z "$name" ]] && echo "[ERROR] Could not determine name of script from json record, skipping." && return 1
 
   # Determine the id of a script that may exist in Jamf Pro with the same name
-  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name | .id')
+  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name ) | .id')
 
   # Create json containing both the original json record and the script contents
   jq -n --argjson cleanRecord "$cleanRecord" --rawfile script "$script" \
@@ -128,6 +177,8 @@ function changed_scripts() {
 function auth() {
   local healthCheckHttpCode response
 
+  debug "AUTH - Attempting to contact Jamf Pro server at $jamfProURL"
+
   # attempt contacting the Jamf Pro Server
   healthCheckHttpCode=$(curl -s "$jamfProURL"/healthCheck.html -X GET -o /dev/null -w "%{http_code}")
 
@@ -135,6 +186,8 @@ function auth() {
     echo "[ERROR] unable to contact the Jamf Pro server; exiting"
     exit 1
   fi
+
+  debug "AUTH - Obtaining API token from $jamfProURL"
 
   response=$(
     curl --request POST \
@@ -150,8 +203,8 @@ function auth() {
 
   apiToken=$(jq -r ".access_token" < "$scriptSummariesFile")
 
-  echo "HTTP Status Code: $response"
-  echo "Token: $apiToken"
+  debug "AUTH - HTTP Status Code: $response"
+  debug "AUTH - Token $apiToken"
   
   parse_http_code "$response" || exit 3
 
@@ -164,6 +217,7 @@ function get_script_summaries() {
   if [[ -e "$scriptSummariesFile" ]]; then
     jq '.' "$scriptSummariesFile" 2>/dev/null || echo '{"results":[]}'
   else
+    debug "Downloading script summaries from Jamf Pro"
     curl -s -X GET \
       --url "$jamfProURL/api/v1/scripts?page=0&page-size=10000&sort=id%3Aasc" \
       --header "Authorization: Bearer $apiToken" \
@@ -180,6 +234,8 @@ function download_script() {
   local dlPath="$3"
   local script shebang extension
 
+  echo "[INFO] Downloading script ID $id ($name)"
+
   # Pull the full script object
   script=$(curl -X GET \
     --url "$jamfProURL/api/v1/scripts/$id" \
@@ -194,7 +250,7 @@ function download_script() {
 
   extension=$(get_script_extension "$shebang")
 
-  echo "[INFO] Writing script \"$name\" to disk."
+  debug "Writing script \"$name\" to disk at $dlPath"
 
   mkdir -p "${dlPath}/${name}"
 
@@ -210,15 +266,19 @@ function parse_http_code() {
   local httpCode="$1"
   case "$httpCode" in
     200) # success
+      debug "HTTP 200: Success"
       return
       ;;
     201)
+      debug "HTTP 201: Created"
       return
       ;;
     202) # accepted for processing
+      debug "HTTP 202: Accepted"
       return
       ;;
     204)
+      debug "HTTP 204: No Content"
       return
       ;;
     400)
@@ -287,16 +347,22 @@ function get_script_extension() {
 }
 
 function finish() {
-  [[ -n "$apiToken" ]] && curl -s -H "Authorization: Bearer $apiToken" --url "$jamfProURL/v1/auth/invalidate-token" -X POST
+  debug "Running cleanup tasks..."
+  [[ -n "$apiToken" ]] && {
+    debug "Invalidating API token"
+    curl -s -H "Authorization: Bearer $apiToken" --url "$jamfProURL/api/v1/auth/invalidate-token" -X POST
+  }
   exec 2>&3  # Restore stderr
   rm "$scriptSummariesFile" 2>/dev/null
   rm "$eaSummariesFile" 2>/dev/null
+  debug "Cleanup complete"
 }
 
 function get_ea_summaries() {
   if [[ -e "$eaSummariesFile" ]]; then
     jq '.' "$eaSummariesFile" 2>/dev/null || echo '{"results":[]}'
   else
+    debug "Downloading EA summaries from Jamf Pro"
     curl -s -X GET \
       --url "$jamfProURL/api/v1/computer-extension-attributes?page=0&page-size=10000&sort=id%3Aasc" \
       --header "Authorization: Bearer $apiToken" \
@@ -313,7 +379,7 @@ function changed_eas() {
 
   # Check if file was deleted (check git status)
   if git ls-files --deleted | grep -q "^${change}$"; then
-    echo "[INFO] Skipping deleted file: $change"
+    debug "Skipping deleted file: $change"
     return 0
   fi
 
@@ -356,7 +422,7 @@ function changed_eas() {
   [[ -z "$name" ]] && echo "[ERROR] Could not determine name of EA from json record, skipping." && return 1
 
   # Determine the id of an EA that may exist in Jamf Pro with the same name
-  id=$(get_ea_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name | .id')
+  id=$(get_ea_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name ) | .id')
 
   # Create json containing both the original json record and the script contents
   jq -n --argjson cleanRecord "$cleanRecord" --rawfile script "$script" \
@@ -413,6 +479,8 @@ function download_ea() {
   local dlPath="$3"
   local ea shebang extension
 
+  echo "[INFO] Downloading EA ID $id ($name)"
+
   # Pull the full EA object
   ea=$(curl -X GET \
     --url "$jamfProURL/api/v1/computer-extension-attributes/$id" \
@@ -427,7 +495,7 @@ function download_ea() {
 
   extension=$(get_script_extension "$shebang")
 
-  echo "[INFO] Writing extension attribute \"$name\" to disk."
+  debug "Writing extension attribute \"$name\" to disk at $dlPath"
 
   mkdir -p "${dlPath}/${name}"
 
@@ -438,7 +506,38 @@ function download_ea() {
   return
 }
 
+function process_all_scripts() {
+  debug "Processing all scripts in ./scripts directory"
+  local scriptCount=0
+
+  # Find all script files (both .json and script files)
+  while IFS= read -r -d '' scriptFile; do
+    local relativePath="${scriptFile#./}"
+    changed_scripts "$relativePath"
+    ((scriptCount++))
+  done < <(find ./scripts -type f \( -name "*.json" -o -name "*.py" -o -name "*.swift" -o -name "*.pl" -o -name "*.rb" -o -name "*.applescript" -o -name "*.zsh" -o -name "*.sh" \) -print0)
+
+  debug "Processed $scriptCount scripts"
+}
+
+function process_all_eas() {
+  debug "Processing all EAs in ./extension-attributes directory"
+  local eaCount=0
+
+  # Find all EA files (both .json and script files)
+  while IFS= read -r -d '' eaFile; do
+    local relativePath="${eaFile#./}"
+    changed_eas "$relativePath"
+    ((eaCount++))
+  done < <(find ./extension-attributes -type f \( -name "*.json" -o -name "*.py" -o -name "*.swift" -o -name "*.pl" -o -name "*.rb" -o -name "*.applescript" -o -name "*.zsh" -o -name "*.sh" \) -print0)
+
+  debug "Processed $eaCount extension attributes"
+}
+
 # Main
+
+# Ensure finish() runs on exit
+trap finish EXIT
 
 # Parse command line arguments
 while test $# -gt 0
@@ -468,12 +567,24 @@ do
     --backup-updated)
       backupUpdated="true"
       ;;
+    --force-scripts)
+      forceScripts="true"
+      ;;
+    --force-eas)
+      forceEAs="true"
+      ;;
     --limit)
       shift
       maxParallelJobs="$1"
       ;;
     --dry-run)
       dryRun="true"
+      ;;
+    --debug)
+      debug="true"
+      ;;
+    --help)
+      print_help
       ;;
     *)
       # Exit if we received an unknown option/flag/argument
@@ -493,10 +604,20 @@ done
 # Obtain Jamf Pro API Bearer Token
 auth
 
-# Obtained $apiToken with 60s timeout
+# Force pushes
+if [[ "$forceScripts" == "true" || "$forceEAs" == "true" ]]; then
+  [[ "$forceScripts" == "true" ]] && {
+    debug "Processing all scripts due to --force-scripts flag"
+    process_all_scripts
+  }
+  [[ "$forceEAs" == "true" ]] && {
+    debug "Processing all EAs due to --force-eas flag"
+    process_all_eas
+  }
+  exit 0
+fi
 
-# get_script_summaries
-
+# Push changes to Jamf Pro if requested
 if [[ "$pushChangesToJamfPro" == "true" ]]; then
   # Make sure we're running from a git repository
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
@@ -505,7 +626,7 @@ if [[ "$pushChangesToJamfPro" == "true" ]]; then
     exit 1
   fi
 
-  echo "[INFO] Determining changes between the last two git commits.."
+  debug "Determining changes between the last two git commits.."
 
   # Get the changes directly into an array
   mapfile -t changes < <(git diff --name-only HEAD HEAD~1 2>/dev/null)
@@ -543,7 +664,7 @@ if [[ "$pushChangesToJamfPro" == "true" ]]; then
     elif [[ "$change" == extension-attributes/* ]]; then
       changed_eas "$change"
     else
-      echo "[WARNING] Ignoring non-tracked changed file: $change"
+      debug "Ignoring non-tracked changed file: $change"
     fi
   done
   exit 0
