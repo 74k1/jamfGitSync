@@ -604,15 +604,16 @@ done
 # Obtain Jamf Pro API Bearer Token
 auth
 
-# Force push all scripts if requested
-if [[ "$forceScripts" == "true" ]]; then
-  process_all_scripts
-  exit 0
-fi
-
-# Force push all EAs if requested
-if [[ "$forceEAs" == "true" ]]; then
-  process_all_eas
+# Force pushes
+if [[ "$forceScripts" == "true" || "$forceEAs" == "true" ]]; then
+  [[ "$forceScripts" == "true" ]] && {
+    debug "Processing all scripts due to --force-scripts flag"
+    process_all_scripts
+  }
+  [[ "$forceEAs" == "true" ]] && {
+    debug "Processing all EAs due to --force-eas flag"
+    process_all_eas
+  }
   exit 0
 fi
 
