@@ -12,7 +12,7 @@ debug="false"
 exec 3>&2
 exec 2>/dev/null
 
-unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken backupUpdated
+unset jamfProURL apiUser apiPass dryRun downloadScripts downloadEAs pushChangesToJamfPro apiToken backupUpdated forceScripts forceEAs
 
 # Checks
 
@@ -45,6 +45,9 @@ Options:
   --push-changes-to-jamf-pro Push local changes to Jamf Pro (requires git)
   --backup-updated           Backup items before updating them in Jamf Pro
   
+  --force-scripts            Push ALL scripts to Jamf Pro (not just changed ones)
+  --force-eas                Push ALL extension attributes to Jamf Pro (not just changed ones)
+  
   --limit N                  Set maximum parallel jobs (default: 2x CPU cores)
   --dry-run                  Simulate changes without actually making them
   --debug                    Enable debug output (more verbose)
@@ -57,6 +60,9 @@ Examples:
   
   # Push changed scripts/EAs to Jamf Pro
   $0 --url https://your.jamf.server --clientid api_client --clientsecret secret --push-changes-to-jamf-pro
+  
+  # Force push all scripts to Jamf Pro
+  $0 --url https://your.jamf.server --clientid api_client --clientsecret secret --force-scripts
 EOF
   exit 0
 }
@@ -500,6 +506,34 @@ function download_ea() {
   return
 }
 
+function process_all_scripts() {
+  debug "Processing all scripts in ./scripts directory"
+  local scriptCount=0
+
+  # Find all script files (both .json and script files)
+  while IFS= read -r -d '' scriptFile; do
+    local relativePath="${scriptFile#./}"
+    changed_scripts "$relativePath"
+    ((scriptCount++))
+  done < <(find ./scripts -type f \( -name "*.json" -o -name "*.py" -o -name "*.swift" -o -name "*.pl" -o -name "*.rb" -o -name "*.applescript" -o -name "*.zsh" -o -name "*.sh" \) -print0)
+
+  debug "Processed $scriptCount scripts"
+}
+
+function process_all_eas() {
+  debug "Processing all EAs in ./extension-attributes directory"
+  local eaCount=0
+
+  # Find all EA files (both .json and script files)
+  while IFS= read -r -d '' eaFile; do
+    local relativePath="${eaFile#./}"
+    changed_eas "$relativePath"
+    ((eaCount++))
+  done < <(find ./extension-attributes -type f \( -name "*.json" -o -name "*.py" -o -name "*.swift" -o -name "*.pl" -o -name "*.rb" -o -name "*.applescript" -o -name "*.zsh" -o -name "*.sh" \) -print0)
+
+  debug "Processed $eaCount extension attributes"
+}
+
 # Main
 
 # Ensure finish() runs on exit
@@ -533,6 +567,12 @@ do
     --backup-updated)
       backupUpdated="true"
       ;;
+    --force-scripts)
+      forceScripts="true"
+      ;;
+    --force-eas)
+      forceEAs="true"
+      ;;
     --limit)
       shift
       maxParallelJobs="$1"
@@ -564,10 +604,19 @@ done
 # Obtain Jamf Pro API Bearer Token
 auth
 
-# Obtained $apiToken with 60s timeout
+# Force push all scripts if requested
+if [[ "$forceScripts" == "true" ]]; then
+  process_all_scripts
+  exit 0
+fi
 
-# get_script_summaries
+# Force push all EAs if requested
+if [[ "$forceEAs" == "true" ]]; then
+  process_all_eas
+  exit 0
+fi
 
+# Push changes to Jamf Pro if requested
 if [[ "$pushChangesToJamfPro" == "true" ]]; then
   # Make sure we're running from a git repository
   if ! git rev-parse --is-inside-work-tree &>/dev/null; then
