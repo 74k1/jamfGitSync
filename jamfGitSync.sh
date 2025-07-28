@@ -117,7 +117,7 @@ function changed_scripts() {
   [[ -z "$name" ]] && echo "[ERROR] Could not determine name of script from json record, skipping." && return 1
 
   # Determine the id of a script that may exist in Jamf Pro with the same name
-  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name | .id')
+  id=$(get_script_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name ) | .id')
 
   # Create json containing both the original json record and the script contents
   jq -n --argjson cleanRecord "$cleanRecord" --rawfile script "$script" \
@@ -416,7 +416,7 @@ function changed_eas() {
   [[ -z "$name" ]] && echo "[ERROR] Could not determine name of EA from json record, skipping." && return 1
 
   # Determine the id of an EA that may exist in Jamf Pro with the same name
-  id=$(get_ea_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name | .id')
+  id=$(get_ea_summaries | jq -r --arg name "$name" -c '.results[] | select( .name == $name ) | .id')
 
   # Create json containing both the original json record and the script contents
   jq -n --argjson cleanRecord "$cleanRecord" --rawfile script "$script" \
