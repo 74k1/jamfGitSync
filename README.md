@@ -18,7 +18,6 @@ This is a rewrite of [git4jamfpro](https://github.com/alectrona/git4jamfpro) (wh
 
 - A Jamf Pro instance (ofcourse)
 - A git vcs server (github, bitbucket, ...)
-- [`jq`](https://github.com/jqlang/jq) installed
 - A generated Client ID & Client Secret for your Jamf Pro instance
     - Permissions required:
       ![required_permissions](/.github/assets/permissions.png)
@@ -42,6 +41,11 @@ This is a rewrite of [git4jamfpro](https://github.com/alectrona/git4jamfpro) (wh
       </details>
 
 - A CI/CD tool for automation (Jenkins, CircleCI, Bitbucket Pipelines, GitHub Workflows, ...)
+- A Runner with at least:
+  - Bash 4.0 or higher (macOS ships with 3.2, beware if you use macOS runners)
+  - `git` installed
+  - [`jq`](https://github.com/jqlang/jq) installed
+
 
 ### Steps
 
